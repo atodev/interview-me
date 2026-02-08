@@ -1,11 +1,12 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { View, Text, StyleSheet, Pressable, Animated, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useSpeechRecognitionEvent } from 'expo-speech-recognition';
 import { colors, spacing, fontSize, fontWeight, borderRadius } from '@/constants/theme';
 import { useInterviewStore } from '@/store';
 import { sttService } from '@/services/stt';
 import { ttsService } from '@/services/elevenlabs';
-import { Audio } from 'expo-av';
+import SineWave from '@/components/SineWave';
 
 type SessionPhase = 'intro' | 'asking' | 'listening' | 'processing' | 'complete';
 
@@ -24,19 +25,68 @@ export default function InterviewSessionScreen() {
   const [isRecording, setIsRecording] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [transcript, setTranscript] = useState('');
+  const [volume, setVolume] = useState(0);
   const pulseAnim = useRef(new Animated.Value(1)).current;
-  const currentSound = useRef<Audio.Sound | null>(null);
+  const waitingForFinal = useRef(false);
 
   const questions = currentInterview?.questions ?? [];
   const totalQuestions = questions.length || tier.questionsPerInterview;
   const question = questions[currentQuestionIndex];
   const progress = ((currentQuestionIndex + 1) / totalQuestions) * 100;
 
-  // Clean up recording and TTS on unmount
+  // Handle speech recognition results (interim + final)
+  const handleResult = useCallback(async (event: any) => {
+    const text = event.results[0]?.transcript ?? '';
+    setTranscript(text);
+
+    if (event.isFinal && waitingForFinal.current) {
+      waitingForFinal.current = false;
+      setPhase('processing');
+      setVolume(0);
+
+      try {
+        await submitAnswer(currentQuestionIndex, text);
+
+        if (currentQuestionIndex + 1 >= totalQuestions) {
+          setPhase('complete');
+        } else {
+          nextQuestion();
+          setPhase('asking');
+        }
+      } catch (e) {
+        Alert.alert(
+          'Submission Error',
+          e instanceof Error ? e.message : 'Could not submit answer'
+        );
+        setPhase('asking');
+      }
+    }
+  }, [currentQuestionIndex, totalQuestions, submitAnswer, nextQuestion]);
+
+  useSpeechRecognitionEvent('result', handleResult);
+
+  // Handle volume changes for sine wave
+  useSpeechRecognitionEvent('volumechange', (event) => {
+    // Normalize from (-2..10) range to (0..1)
+    setVolume(Math.max(0, Math.min(1, event.value / 10)));
+  });
+
+  // Handle speech recognition errors
+  useSpeechRecognitionEvent('error', (event) => {
+    if (event.error !== 'aborted') {
+      setIsRecording(false);
+      waitingForFinal.current = false;
+      setVolume(0);
+      Alert.alert('Recognition Error', event.message || 'Speech recognition failed');
+      setPhase('asking');
+    }
+  });
+
+  // Clean up on unmount
   useEffect(() => {
     return () => {
       sttService.cancel();
-      ttsService.stop(currentSound.current);
+      ttsService.stop();
     };
   }, []);
 
@@ -46,18 +96,8 @@ export default function InterviewSessionScreen() {
       setIsSpeaking(true);
       ttsService
         .speak(question.question)
-        .then((sound) => {
-          currentSound.current = sound;
-          sound.setOnPlaybackStatusUpdate((status) => {
-            if ('didJustFinish' in status && status.didJustFinish) {
-              setIsSpeaking(false);
-              currentSound.current = null;
-            }
-          });
-        })
-        .catch(() => {
-          setIsSpeaking(false);
-        });
+        .then(() => setIsSpeaking(false))
+        .catch(() => setIsSpeaking(false));
     }
   }, [phase, currentQuestionIndex]);
 
@@ -78,13 +118,12 @@ export default function InterviewSessionScreen() {
   async function handleStartListening() {
     try {
       // Stop TTS if still speaking
-      if (currentSound.current) {
-        await ttsService.stop(currentSound.current);
-        currentSound.current = null;
+      if (isSpeaking) {
+        ttsService.stop();
         setIsSpeaking(false);
       }
 
-      await sttService.startRecording();
+      await sttService.start();
       setPhase('listening');
       setIsRecording(true);
       setTranscript('');
@@ -96,29 +135,11 @@ export default function InterviewSessionScreen() {
     }
   }
 
-  async function handleStopListening() {
+  function handleStopListening() {
     setIsRecording(false);
-    setPhase('processing');
-
-    try {
-      const finalTranscript = await sttService.stopAndTranscribe();
-      setTranscript(finalTranscript);
-
-      await submitAnswer(currentQuestionIndex, finalTranscript);
-
-      if (currentQuestionIndex + 1 >= totalQuestions) {
-        setPhase('complete');
-      } else {
-        nextQuestion();
-        setPhase('asking');
-      }
-    } catch (e) {
-      Alert.alert(
-        'Transcription Error',
-        e instanceof Error ? e.message : 'Could not transcribe audio'
-      );
-      setPhase('asking');
-    }
+    waitingForFinal.current = true;
+    sttService.stop();
+    // Final result will arrive via the "result" event handler above
   }
 
   async function handleFinish() {
@@ -209,9 +230,13 @@ export default function InterviewSessionScreen() {
         )}
       </View>
 
-      {/* Mic Button */}
+      {/* Sine Wave + Mic Button */}
       {(phase === 'asking' || phase === 'listening') && (
         <View style={styles.micContainer}>
+          <SineWave
+            volume={isRecording ? volume : isSpeaking ? 0.15 : 0.05}
+            color={isRecording ? '#10B981' : '#3B82F6'}
+          />
           <Pressable
             onPress={isRecording ? handleStopListening : handleStartListening}
             style={styles.micButtonOuter}

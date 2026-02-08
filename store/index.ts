@@ -77,6 +77,7 @@ interface InterviewState {
 
   // Actions
   setTier: (tierName: TierName) => void;
+  loadHistory: () => Promise<void>;
   setJobListing: (input: string, mode: 'url' | 'paste', style: string) => Promise<void>;
   submitAnswer: (questionIndex: number, answer: string) => Promise<void>;
   nextQuestion: () => void;
@@ -98,6 +99,46 @@ export const useInterviewStore = create<InterviewState>((set, get) => ({
 
   // Actions
   setTier: (tierName) => set({ tier: TIERS[tierName] }),
+
+  loadHistory: async () => {
+    try {
+      const interviews = await aiService.getHistory();
+      const pastInterviews: PastInterview[] = interviews.map((i: any) => ({
+        id: i.id,
+        jobTitle: i.job_title,
+        company: i.company ?? 'Unknown',
+        overallScore: i.overall_score ?? 0,
+        completedAt: i.completed_at ?? i.created_at,
+        report: i.report ?? {},
+      }));
+
+      // Compute interviewsThisMonth
+      const now = new Date();
+      const curMonth = now.getMonth();
+      const curYear = now.getFullYear();
+      const interviewsThisMonth = pastInterviews.filter((i) => {
+        const d = new Date(i.completedAt);
+        return d.getMonth() === curMonth && d.getFullYear() === curYear;
+      }).length;
+
+      // Compute streak: consecutive days with at least one interview, backwards from today
+      const daySet = new Set<string>();
+      for (const i of pastInterviews) {
+        daySet.add(new Date(i.completedAt).toISOString().split('T')[0]);
+      }
+      let streak = 0;
+      const check = new Date(now);
+      check.setHours(0, 0, 0, 0);
+      while (daySet.has(check.toISOString().split('T')[0])) {
+        streak++;
+        check.setDate(check.getDate() - 1);
+      }
+
+      set({ pastInterviews, interviewsThisMonth, streak });
+    } catch {
+      // Silently fail — user may not be authenticated
+    }
+  },
 
   setJobListing: async (input, mode, style) => {
     const parsed = await aiService.parseJobListing(input, mode);

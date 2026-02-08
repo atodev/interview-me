@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -10,11 +10,12 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useSpeechRecognitionEvent } from 'expo-speech-recognition';
 import { colors, spacing, fontSize, fontWeight, borderRadius } from '@/constants/theme';
 import { useCoachingStore } from '@/store/coaching';
 import { sttService } from '@/services/stt';
 import { ttsService } from '@/services/elevenlabs';
-import { Audio } from 'expo-av';
+import SineWave from '@/components/SineWave';
 
 type Phase = 'loading' | 'asking' | 'listening' | 'processing' | 'feedback' | 'day_complete';
 
@@ -41,8 +42,10 @@ export default function CoachingSessionScreen() {
   const [lastEvaluation, setLastEvaluation] = useState<any>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const currentSound = useRef<Audio.Sound | null>(null);
+  const [transcript, setTranscript] = useState('');
+  const [volume, setVolume] = useState(0);
   const pulseAnim = useRef(new Animated.Value(1)).current;
+  const waitingForFinal = useRef(false);
 
   const questions = currentDay?.questions ?? [];
   const question = questions[questionIndex];
@@ -51,6 +54,53 @@ export default function CoachingSessionScreen() {
 
   // Get the job listing from the program for evaluations
   const jobListing = useCoachingStore((s) => s.activeProgram?.interviews?.job_listing_parsed);
+
+  // Handle speech recognition results (interim + final)
+  const handleResult = useCallback(async (event: any) => {
+    const text = event.results[0]?.transcript ?? '';
+    setTranscript(text);
+
+    if (event.isFinal && waitingForFinal.current) {
+      waitingForFinal.current = false;
+      setPhase('processing');
+      setVolume(0);
+
+      try {
+        const evaluation = await submitAttempt({
+          dayId: dayId!,
+          questionIndex,
+          attemptNumber,
+          answer: text,
+          question,
+          jobListing,
+        });
+
+        setLastEvaluation(evaluation);
+        setPhase('feedback');
+      } catch (e) {
+        Alert.alert('Error', e instanceof Error ? e.message : 'Failed to process answer');
+        setPhase('asking');
+      }
+    }
+  }, [questionIndex, attemptNumber, dayId, question, jobListing, submitAttempt]);
+
+  useSpeechRecognitionEvent('result', handleResult);
+
+  // Handle volume changes for sine wave
+  useSpeechRecognitionEvent('volumechange', (event) => {
+    setVolume(Math.max(0, Math.min(1, event.value / 10)));
+  });
+
+  // Handle speech recognition errors
+  useSpeechRecognitionEvent('error', (event) => {
+    if (event.error !== 'aborted') {
+      setIsRecording(false);
+      waitingForFinal.current = false;
+      setVolume(0);
+      Alert.alert('Recognition Error', event.message || 'Speech recognition failed');
+      setPhase('asking');
+    }
+  });
 
   useEffect(() => {
     if (dayId) {
@@ -66,7 +116,7 @@ export default function CoachingSessionScreen() {
   useEffect(() => {
     return () => {
       sttService.cancel();
-      ttsService.stop(currentSound.current);
+      ttsService.stop();
     };
   }, []);
 
@@ -76,15 +126,7 @@ export default function CoachingSessionScreen() {
       setIsSpeaking(true);
       ttsService
         .speak(question.question)
-        .then((sound) => {
-          currentSound.current = sound;
-          sound.setOnPlaybackStatusUpdate((status) => {
-            if ('didJustFinish' in status && status.didJustFinish) {
-              setIsSpeaking(false);
-              currentSound.current = null;
-            }
-          });
-        })
+        .then(() => setIsSpeaking(false))
         .catch(() => setIsSpeaking(false));
     }
   }, [phase, questionIndex, attemptNumber]);
@@ -105,41 +147,23 @@ export default function CoachingSessionScreen() {
 
   async function handleStartListening() {
     try {
-      if (currentSound.current) {
-        await ttsService.stop(currentSound.current);
-        currentSound.current = null;
+      if (isSpeaking) {
+        ttsService.stop();
         setIsSpeaking(false);
       }
-      await sttService.startRecording();
+      await sttService.start();
       setPhase('listening');
       setIsRecording(true);
+      setTranscript('');
     } catch (e) {
       Alert.alert('Microphone Error', e instanceof Error ? e.message : 'Could not start recording');
     }
   }
 
-  async function handleStopListening() {
+  function handleStopListening() {
     setIsRecording(false);
-    setPhase('processing');
-
-    try {
-      const transcript = await sttService.stopAndTranscribe();
-
-      const evaluation = await submitAttempt({
-        dayId: dayId!,
-        questionIndex,
-        attemptNumber,
-        answer: transcript,
-        question,
-        jobListing,
-      });
-
-      setLastEvaluation(evaluation);
-      setPhase('feedback');
-    } catch (e) {
-      Alert.alert('Error', e instanceof Error ? e.message : 'Failed to process answer');
-      setPhase('asking');
-    }
+    waitingForFinal.current = true;
+    sttService.stop();
   }
 
   function handleRetry() {
@@ -212,7 +236,7 @@ export default function CoachingSessionScreen() {
         {phase === 'listening' && (
           <View style={styles.centered}>
             <Text style={styles.listeningLabel}>Listening...</Text>
-            <Text style={styles.hint}>Tap the mic when finished</Text>
+            <Text style={styles.hint}>{transcript || 'Start speaking...'}</Text>
           </View>
         )}
 
@@ -301,9 +325,13 @@ export default function CoachingSessionScreen() {
         )}
       </ScrollView>
 
-      {/* Mic Button */}
+      {/* Sine Wave + Mic Button */}
       {(phase === 'asking' || phase === 'listening') && (
         <View style={styles.micContainer}>
+          <SineWave
+            volume={isRecording ? volume : isSpeaking ? 0.15 : 0.05}
+            color={isRecording ? '#10B981' : '#3B82F6'}
+          />
           <Pressable onPress={isRecording ? handleStopListening : handleStartListening}>
             <Animated.View
               style={[

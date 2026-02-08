@@ -67,14 +67,21 @@ export default function ProfileScreen() {
       {/* Settings */}
       <View style={styles.settingsSection}>
         <Text style={styles.sectionTitle}>Settings</Text>
-        {['Notifications', 'Voice Preference', 'Privacy', 'Help & Support'].map(
-          (item) => (
-            <Pressable key={item} style={styles.settingsRow}>
-              <Text style={styles.settingsText}>{item}</Text>
-              <Text style={styles.chevron}>›</Text>
-            </Pressable>
-          )
-        )}
+        {[
+          { label: 'Notifications', route: null },
+          { label: 'Voice Preference', route: '/settings/voice' },
+          { label: 'Privacy', route: null },
+          { label: 'Help & Support', route: null },
+        ].map((item) => (
+          <Pressable
+            key={item.label}
+            style={styles.settingsRow}
+            onPress={item.route ? () => router.push(item.route as any) : undefined}
+          >
+            <Text style={styles.settingsText}>{item.label}</Text>
+            <Text style={styles.chevron}>›</Text>
+          </Pressable>
+        ))}
       </View>
 
       {/* Auth */}

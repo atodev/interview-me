@@ -16,7 +16,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.interviewme.app",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "We need microphone access to hear your interview answers."
+        "NSMicrophoneUsageDescription": "We need microphone access to hear your interview answers.",
+        "NSSpeechRecognitionUsageDescription": "We need speech recognition to transcribe your answers in real-time."
       }
     },
     "android": {
@@ -38,7 +39,11 @@
     "plugins": [
       "expo-router",
       "expo-asset",
-      "expo-font"
+      "expo-font",
+      ["expo-speech-recognition", {
+        "microphonePermission": "We need microphone access to hear your interview answers.",
+        "speechRecognitionPermission": "We need speech recognition to transcribe your answers in real-time."
+      }]
     ]
   }
 }

@@ -1,4 +1,5 @@
-import { View, Text, StyleSheet, FlatList, Pressable } from 'react-native';
+import { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, FlatList, Pressable, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { colors, spacing, fontSize, fontWeight, borderRadius } from '@/constants/theme';
 import { useInterviewStore } from '@/store';
@@ -22,7 +23,20 @@ function ScoreBadge({ score }: { score: number }) {
 
 export default function HistoryScreen() {
   const router = useRouter();
-  const { pastInterviews } = useInterviewStore();
+  const { pastInterviews, loadHistory } = useInterviewStore();
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    loadHistory().finally(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.emptyState]}>
+        <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>

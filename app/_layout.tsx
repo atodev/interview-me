@@ -5,6 +5,7 @@ import { StatusBar } from 'expo-status-bar';
 import { colors } from '@/constants/theme';
 import { useAuthStore } from '@/store/auth';
 import { useInterviewStore } from '@/store';
+import { useVoiceStore } from '@/store/voice';
 import { hasCompletedOnboarding } from '@/app/onboarding';
 
 export default function RootLayout() {
@@ -15,7 +16,7 @@ export default function RootLayout() {
 
   useEffect(() => {
     async function boot() {
-      await initialize();
+      await Promise.all([initialize(), useVoiceStore.getState().load()]);
       const tier = useAuthStore.getState().tier;
       setTier(tier.name);
 
@@ -65,6 +66,7 @@ export default function RootLayout() {
         <Stack.Screen name="coaching/session" options={{ gestureEnabled: false }} />
         <Stack.Screen name="coaching/program-complete" />
         <Stack.Screen name="onboarding" options={{ gestureEnabled: false }} />
+        <Stack.Screen name="settings/voice" />
       </Stack>
     </>
   );

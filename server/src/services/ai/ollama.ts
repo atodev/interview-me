@@ -31,6 +31,54 @@ function extractJson(text: string): string {
   return jsonMatch ? jsonMatch[0] : cleaned;
 }
 
+/**
+ * Attempt to fix common JSON issues from small Ollama models:
+ * - Trailing commas before } or ]
+ * - Missing commas between properties
+ * - Single quotes instead of double quotes (when safe)
+ * - Truncated JSON (missing closing braces/brackets)
+ */
+function repairJson(raw: string): string {
+  let s = raw;
+
+  // Remove trailing commas before } or ]
+  s = s.replace(/,\s*([}\]])/g, '$1');
+
+  // Fix missing commas between properties: }\n" or ]\n" patterns
+  s = s.replace(/(["\d\]}\w])\s*\n\s*"/g, '$1,\n"');
+
+  // Balance braces/brackets — append missing closers
+  let braces = 0;
+  let brackets = 0;
+  let inString = false;
+  let escape = false;
+  for (const ch of s) {
+    if (escape) { escape = false; continue; }
+    if (ch === '\\') { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === '{') braces++;
+    else if (ch === '}') braces--;
+    else if (ch === '[') brackets++;
+    else if (ch === ']') brackets--;
+  }
+  while (brackets > 0) { s += ']'; brackets--; }
+  while (braces > 0) { s += '}'; braces--; }
+
+  return s;
+}
+
+function safeJsonParse(raw: string): any {
+  // First try direct parse
+  try { return JSON.parse(raw); } catch {}
+
+  // Try with repairs
+  const repaired = repairJson(raw);
+  try { return JSON.parse(repaired); } catch {}
+
+  throw new Error(`Failed to parse JSON from Ollama: ${raw.slice(0, 200)}`);
+}
+
 export class OllamaProvider implements AIProvider {
   readonly name = 'ollama';
 
@@ -67,7 +115,7 @@ export class OllamaProvider implements AIProvider {
       SYSTEM_PROMPTS.parseJobListing,
       rawText.slice(0, 8000)
     );
-    return JSON.parse(result);
+    return safeJsonParse(result);
   }
 
   async generateQuestions(
@@ -80,7 +128,7 @@ Interview Style: ${style}
 Number of Questions: ${count}`;
 
     const result = await this.generate(SYSTEM_PROMPTS.generateQuestions, context);
-    const parsed = JSON.parse(result);
+    const parsed = safeJsonParse(result);
 
     // Handle various formats from small models
     if (Array.isArray(parsed)) return parsed;
@@ -116,8 +164,28 @@ Target Skill: ${question.targetSkill}
 Candidate's Answer:
 ${answer.slice(0, 3000)}`;
 
-    const result = await this.generate(SYSTEM_PROMPTS.evaluateAnswer, context);
-    return JSON.parse(result);
+    // Retry up to 2 times — malformed JSON from small models is common
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const result = await this.generate(SYSTEM_PROMPTS.evaluateAnswer, context);
+        return safeJsonParse(result);
+      } catch (err) {
+        console.warn(`Evaluate attempt ${attempt + 1} failed:`, (err as Error).message?.slice(0, 150));
+        if (attempt === 2) {
+          // Return a graceful fallback instead of crashing the interview
+          console.error('All evaluate attempts failed, returning fallback score');
+          return {
+            score: 5,
+            strengths: ['Answer was provided'],
+            improvements: ['Unable to fully evaluate — please try again'],
+            idealAnswer: 'Evaluation was not available for this question.',
+            tip: 'Try providing more specific examples in your answer.',
+          };
+        }
+      }
+    }
+    // Unreachable, but TypeScript needs it
+    throw new Error('evaluateAnswer failed');
   }
 
   async generateReport(
@@ -137,6 +205,6 @@ Interview Results:
 ${qaSection}`;
 
     const result = await this.generate(SYSTEM_PROMPTS.generateReport, context);
-    return JSON.parse(result);
+    return safeJsonParse(result);
   }
 }

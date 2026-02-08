@@ -1,79 +1,49 @@
-import { Audio } from 'expo-av';
-import { getAccessToken } from '@/store/auth';
-
-const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
+import { ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
 
 /**
- * Speech-to-text service using Whisper via backend proxy.
- * Records audio on device, sends to backend for transcription.
+ * Speech-to-text service using native iOS/Android speech recognition.
+ * No server calls, no rate limits, no API costs.
+ *
+ * Use `useSpeechRecognitionEvent` hooks in the component for:
+ * - "result" events (interim + final transcription)
+ * - "volumechange" events (audio levels for visualization)
  */
 export const sttService = {
-  recording: null as Audio.Recording | null,
-
   /**
-   * Start recording audio from the microphone.
+   * Request permissions and start native speech recognition.
+   * Results come via useSpeechRecognitionEvent("result") hook.
+   * Volume levels come via useSpeechRecognitionEvent("volumechange") hook.
    */
-  async startRecording(): Promise<void> {
-    const permission = await Audio.requestPermissionsAsync();
-    if (!permission.granted) {
-      throw new Error('Microphone permission not granted');
+  async start(): Promise<void> {
+    const { granted } = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+    if (!granted) {
+      throw new Error('Speech recognition permission not granted');
     }
 
-    await Audio.setAudioModeAsync({
-      allowsRecordingIOS: true,
-      playsInSilentModeIOS: true,
+    ExpoSpeechRecognitionModule.start({
+      lang: 'en-US',
+      interimResults: true,
+      continuous: true,
+      addsPunctuation: true,
+      volumeChangeEventOptions: {
+        enabled: true,
+        intervalMillis: 100,
+      },
     });
-
-    const { recording } = await Audio.Recording.createAsync(
-      Audio.RecordingOptionsPresets.HIGH_QUALITY
-    );
-    this.recording = recording;
   },
 
   /**
-   * Stop recording and transcribe the audio.
-   * Returns the transcribed text.
+   * Stop recognition and wait for the final result.
+   * The final result will arrive via the "result" event with isFinal=true.
    */
-  async stopAndTranscribe(): Promise<string> {
-    if (!this.recording) throw new Error('No active recording');
-
-    await this.recording.stopAndUnloadAsync();
-    const uri = this.recording.getURI();
-    this.recording = null;
-
-    if (!uri) throw new Error('No recording URI');
-
-    // Send audio to backend for Whisper transcription
-    const formData = new FormData();
-    formData.append('audio', {
-      uri,
-      type: 'audio/m4a',
-      name: 'recording.m4a',
-    } as any);
-
-    const token = await getAccessToken();
-    const headers: Record<string, string> = {};
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-
-    const res = await fetch(`${API_BASE}/api/voice/stt`, {
-      method: 'POST',
-      headers,
-      body: formData,
-    });
-
-    if (!res.ok) throw new Error('Transcription failed');
-
-    const { text } = await res.json();
-    return text;
+  stop(): void {
+    ExpoSpeechRecognitionModule.stop();
   },
 
   /**
-   * Cancel an in-progress recording without transcribing.
+   * Cancel recognition immediately without waiting for a final result.
    */
-  async cancel(): Promise<void> {
-    if (this.recording) {
-      await this.recording.stopAndUnloadAsync();
-      this.recording = null;
-    }
+  cancel(): void {
+    ExpoSpeechRecognitionModule.abort();
   },
 };
