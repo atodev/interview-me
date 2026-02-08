@@ -1,0 +1,7 @@
+add apple watch to premium - coach while you walk
+the coach will ask 3 questions on your chosen role and. cretique your ans and " a better ans would be" ..... wuold you like to try again ...
+
+
+Backend restart:lsof -i :3001 -t | xargs kill 2>/dev/null; sleep 1; cd /Users/tombutler/development/interview-me/server && npx tsx watch src/index.ts &
+sleep 3
+curl -s http://localhost:3001/health
